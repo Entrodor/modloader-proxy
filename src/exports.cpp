@@ -15,8 +15,8 @@
 
 #define DEFINE_STUB(n)                                                        \
     extern "C" { FARPROC fp_##n = nullptr; }                                  \
-    asm(".pushsection .drectve\n\t.ascii \" -export:" #n "\"\n\t.popsection\n\t" \
-        ".pushsection .text\n\t.p2align 4\n\t.globl " SYM(#n) "\n"            \
-        SYM(#n) ":\n\t" JMP(SYM("fp_" #n)) "\n\t.popsection\n");
-
+    asm(".section .drectve\n\t.ascii \" -export:" #n "\"\n\t"                 \
+        ".text\n\t.p2align 4\n\t.globl " SYM(#n) "\n"                        \
+        SYM(#n) ":\n\t" JMP(SYM("fp_" #n)) "\n");
+        
 LIST_ALL(DEFINE_STUB)
