@@ -28,7 +28,7 @@ jobs:
           for arch in x64 x86; do
             d=dist/modloader-proxy-$arch
             mkdir -p "$d"
-            cp build/$arch/modloader-proxy.dll chainloader.ini README.md LICENSE "$d/"
+            cp build/$arch/modloader-proxy.dll build/gen/supported_dlls.txt chainloader.ini README.md LICENSE "$d/"
             (cd dist && zip -r "modloader-proxy-$arch.zip" "modloader-proxy-$arch")
           done
 

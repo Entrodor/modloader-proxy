@@ -4,6 +4,7 @@
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
 
+#include <algorithm>
 #include <cstdarg>
 #include <cstdio>
 #include <cwctype>
@@ -19,6 +20,8 @@ struct Config {
     bool log = false;
     bool deferred = false;
     DWORD delayMs = 0;
+    bool loadFolder = false;
+    std::wstring folder = L"mods";
     std::vector<std::wstring> mods;
 };
 
@@ -109,18 +112,23 @@ bool LoadConfig(Config& cfg) {
             section = Lower(Trim(line.substr(1, line.size() - 2)));
             continue;
         }
+        size_t sc = line.find(L" ;");  // inline comment
+        if (sc != std::wstring::npos) line = Trim(line.substr(0, sc));
+        if (line.empty()) continue;
+
         if (section == L"settings") {
             size_t eq = line.find(L'=');
             if (eq == std::wstring::npos) continue;
             std::wstring key = Lower(Trim(line.substr(0, eq)));
-            std::wstring val = Lower(Trim(line.substr(eq + 1)));
+            std::wstring value = Trim(line.substr(eq + 1));  // case preserved (folder names)
+            std::wstring val = Lower(value);
             if (key == L"log") cfg.log = ParseBool(val);
             else if (key == L"deferred") cfg.deferred = ParseBool(val);
             else if (key == L"delayms") cfg.delayMs = (DWORD)_wtoi(val.c_str());
+            else if (key == L"loadfromfolder") cfg.loadFolder = ParseBool(val);
+            else if (key == L"modsfolder") cfg.folder = value;
         } else if (section == L"load") {
-            size_t sc = line.find(L" ;");  // inline comment
-            if (sc != std::wstring::npos) line = Trim(line.substr(0, sc));
-            if (!line.empty()) cfg.mods.push_back(line);
+            cfg.mods.push_back(line);
         }
     }
     return true;
@@ -128,20 +136,13 @@ bool LoadConfig(Config& cfg) {
 
 // ---- real DLL forwarding ------------------------------------------------
 
-#define BIND(n) fp_##n = GetProcAddress(real, #n);
-void BindVersion(HMODULE real) { LIST_VERSION(BIND) }
-void BindDInput8(HMODULE real) { LIST_DINPUT8(BIND) }
-void BindDSound(HMODULE real) { LIST_DSOUND(BIND) }
-
 struct ProxyTarget {
     const wchar_t* dll;
     void (*bind)(HMODULE);
 };
-const ProxyTarget kTargets[] = {
-    {L"version.dll", BindVersion},
-    {L"dinput8.dll", BindDInput8},
-    {L"dsound.dll", BindDSound},
-};
+
+#define BIND(n) fp_##n = GetProcAddress(real, #n);
+#include "proxy_targets_gen.inc"  // generated: Bind_N() functions + kTargets[]
 
 void BindRealDll() {
     wchar_t sys[MAX_PATH];
@@ -167,9 +168,52 @@ std::wstring Resolve(std::wstring p) {
     return absolute ? p : g_dir + p;
 }
 
+// Non-recursive scan for *.dll, sorted by name (case-insensitive).
+void ScanFolder(std::wstring dir, std::vector<std::wstring>& out) {
+    if (dir.empty() || dir.back() != L'\\') dir += L'\\';
+    WIN32_FIND_DATAW fd;
+    HANDLE h = FindFirstFileW((dir + L"*.dll").c_str(), &fd);
+    if (h == INVALID_HANDLE_VALUE) {
+        Log(L"No DLLs found in folder %ls (error %lu)", dir.c_str(), GetLastError());
+        return;
+    }
+    std::vector<std::wstring> found;
+    do {
+        if (fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) continue;
+        std::wstring name = fd.cFileName;
+        // "*.dll" can also match longer extensions via 8.3 short names; require exactly .dll
+        if (name.size() < 4 || Lower(name.substr(name.size() - 4)) != L".dll") continue;
+        found.push_back(name);
+    } while (FindNextFileW(h, &fd));
+    FindClose(h);
+    std::sort(found.begin(), found.end(),
+              [](const std::wstring& a, const std::wstring& b) { return Lower(a) < Lower(b); });
+    for (const auto& n : found) out.push_back(dir + n);
+}
+
 void LoadMods(const Config& cfg) {
-    for (const auto& entry : cfg.mods) {
-        std::wstring path = Resolve(entry);
+    // Explicit [Load] entries first (in the order written), then the folder (alphabetical).
+    std::vector<std::wstring> paths;
+    for (const auto& e : cfg.mods) paths.push_back(Resolve(e));
+
+    if (cfg.loadFolder) {
+        std::wstring f = Trim(cfg.folder);
+        for (auto& c : f) if (c == L'/') c = L'\\';
+        while (!f.empty() && f.back() == L'\\') f.pop_back();
+        if (f.empty() || f == L".") {
+            Log(L"ModsFolder must be a subfolder, not the game folder itself; skipping folder load");
+        } else {
+            std::vector<std::wstring> scanned;
+            ScanFolder(Resolve(f), scanned);
+            for (const auto& p : scanned) {
+                bool dup = false;
+                for (const auto& q : paths) if (Lower(q) == Lower(p)) { dup = true; break; }
+                if (!dup) paths.push_back(p);
+            }
+        }
+    }
+
+    for (const auto& path : paths) {
         size_t slash = path.find_last_of(L'\\');
         if (Lower(path.substr(slash + 1)) == g_selfName) continue;  // never load ourselves
         HMODULE m = LoadLibraryExW(path.c_str(), nullptr, LOAD_WITH_ALTERED_SEARCH_PATH);

@@ -1,0 +1,12 @@
+DirectSoundCreate
+DirectSoundEnumerateA
+DirectSoundEnumerateW
+DirectSoundCaptureCreate
+DirectSoundCaptureEnumerateA
+DirectSoundCaptureEnumerateW
+DirectSoundCreate8
+DirectSoundCaptureCreate8
+DirectSoundFullDuplexCreate
+GetDeviceID
+DllCanUnloadNow
+DllGetClassObject

@@ -13,10 +13,12 @@
   #define JMP(s) "jmp *" s
 #endif
 
+// Note: the COFF assembler has no .pushsection/.popsection, so switch sections
+// explicitly and always return to .text at the end.
 #define DEFINE_STUB(n)                                                        \
     extern "C" { FARPROC fp_##n = nullptr; }                                  \
     asm(".section .drectve\n\t.ascii \" -export:" #n "\"\n\t"                 \
         ".text\n\t.p2align 4\n\t.globl " SYM(#n) "\n"                        \
         SYM(#n) ":\n\t" JMP(SYM("fp_" #n)) "\n");
-        
+
 LIST_ALL(DEFINE_STUB)
