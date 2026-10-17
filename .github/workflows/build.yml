@@ -3,12 +3,13 @@ name: build
 on:
   push:
     branches: [main]
-    tags: ['v*']
   pull_request:
+  release:
+    types: [published]   # fires when you publish a release in the GitHub UI
   workflow_dispatch:
 
 permissions:
-  contents: write
+  contents: write        # needed to upload assets to a release
 
 jobs:
   build:
@@ -23,23 +24,29 @@ jobs:
         run: make all
 
       - name: Package
+        env:
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
         run: |
+          VERSION="${RELEASE_TAG:-dev-${GITHUB_SHA::7}}"
           mkdir -p dist
           for arch in x64 x86; do
-            d=dist/modloader-proxy-$arch
+            d="dist/modloader-proxy-$VERSION-$arch"
             mkdir -p "$d"
-            cp build/$arch/modloader-proxy.dll build/gen/supported_dlls.txt chainloader.ini README.md LICENSE "$d/"
-            (cd dist && zip -r "modloader-proxy-$arch.zip" "modloader-proxy-$arch")
+            cp build/$arch/modloader-proxy.dll build/gen/supported_dlls.txt \
+               chainloader.ini README.md LICENSE "$d/"
+            (cd dist && zip -r "modloader-proxy-$VERSION-$arch.zip" "modloader-proxy-$VERSION-$arch")
           done
 
+      # Every run: downloadable from the run's page (handy for testing before a release)
       - uses: actions/upload-artifact@v4
         with:
           name: modloader-proxy
           path: dist/*.zip
 
-      - name: Publish release
-        if: startsWith(github.ref, 'refs/tags/v')
-        uses: softprops/action-gh-release@v2
-        with:
-          files: dist/*.zip
-          generate_release_notes: true
+      # Release runs only: attach the zips to the release that triggered this
+      - name: Upload assets to release
+        if: github.event_name == 'release'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+        run: gh release upload "$RELEASE_TAG" dist/*.zip --clobber

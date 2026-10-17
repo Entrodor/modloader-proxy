@@ -1,5 +1,8 @@
 # modloader-proxy
 
+This Project is made with the help of Claude. Expect bugs or bad coding practices.
+If you don't like Vibecoded Stuff, then please find something else.
+
 A small, configurable DLL proxy / chainloader for **singleplayer game mods** that
 all need the same kind of loader. Rename the DLL to something the game already
 loads, list your mod DLLs in `chainloader.ini` (and/or drop them in a folder), and
