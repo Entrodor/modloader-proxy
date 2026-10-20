@@ -1,7 +1,7 @@
 # modloader-proxy
 
-This Project is made with the help of Claude. Expect bugs or bad coding practices.
-If you don't like Vibecoded Stuff, then please find something else.
+> This Project is made with the help of Claude. Expect bugs or bad coding practices.
+> If you don't like Vibecoded Stuff, then please find something else.
 
 A small, configurable DLL proxy / chainloader for **singleplayer game mods** that
 all need the same kind of loader. Rename the DLL to something the game already
@@ -37,6 +37,30 @@ Headless dedicated servers often don't load `dinput8`/`dsound` at all, so prefer
 
 `[Load]` takes one DLL path per line. Load order: `[Load]` entries first, in order,
 then folder DLLs alphabetically. A DLL listed in both is only loaded once.
+
+## Chaining another proxy mod (`ForwardTo`)
+
+Some mods are proxies themselves (their own `dinput8.dll`, say) and rely on the
+*game* calling their exports. Loading them as a normal mod runs their `DllMain`,
+but the game never calls them, because it is linked to this proxy. Set:
+
+```ini
+[Settings]
+ForwardTo = mods\XHL\dinput8.dll
+```
+
+The call path becomes game -> this proxy -> that mod -> real system DLL. For each
+exported function, the mod's export of the same name is used if it has one,
+otherwise the call goes straight to the system DLL. The log reports how many
+exports were routed to the mod.
+
+Notes:
+- One target only: a call can't be split between several mods. Additional proxy mods
+  would have to chain to each other themselves.
+- If the mod finds the real DLL from its own file name, give it the name of the
+  proxy you chose, in its own folder (as in the example above).
+- It is loaded before the game can call anything, and is not loaded a second time
+  as a normal mod.
 
 ## Adding a new proxy name (no C++ changes)
 

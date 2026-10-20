@@ -22,6 +22,7 @@ struct Config {
     DWORD delayMs = 0;
     bool loadFolder = false;
     std::wstring folder = L"mods";
+    std::wstring forwardTo;  // optional proxy-mod DLL that receives the game's calls
     std::vector<std::wstring> mods;
 };
 
@@ -127,6 +128,7 @@ bool LoadConfig(Config& cfg) {
             else if (key == L"delayms") cfg.delayMs = (DWORD)_wtoi(val.c_str());
             else if (key == L"loadfromfolder") cfg.loadFolder = ParseBool(val);
             else if (key == L"modsfolder") cfg.folder = value;
+            else if (key == L"forwardto") cfg.forwardTo = value;
         } else if (section == L"load") {
             cfg.mods.push_back(line);
         }
@@ -138,13 +140,19 @@ bool LoadConfig(Config& cfg) {
 
 struct ProxyTarget {
     const wchar_t* dll;
-    void (*bind)(HMODULE);
+    void (*bind)(HMODULE real, HMODULE fwd);
 };
 
-#define BIND(n) fp_##n = GetProcAddress(real, #n);
+// Each export prefers the ForwardTo module's export of the same name (if there is one),
+// and falls back to the real system DLL's.
+int g_forwarded = 0;  // how many exports were routed to the ForwardTo module
+#define BIND(n)                                                          \
+    fp_##n = fwd ? GetProcAddress(fwd, #n) : nullptr;                    \
+    if (fp_##n) ++g_forwarded;                                           \
+    else fp_##n = real ? GetProcAddress(real, #n) : nullptr;
 #include "proxy_targets_gen.inc"  // generated: Bind_N() functions + kTargets[]
 
-void BindRealDll() {
+void BindRealDll(HMODULE fwd) {
     wchar_t sys[MAX_PATH];
     UINT n = GetSystemDirectoryW(sys, MAX_PATH);
     if (n == 0 || n >= MAX_PATH) { Log(L"GetSystemDirectory failed"); return; }
@@ -152,9 +160,14 @@ void BindRealDll() {
         if (g_selfName != t.dll) continue;
         std::wstring p = std::wstring(sys) + L"\\" + t.dll;
         HMODULE real = LoadLibraryW(p.c_str());
-        if (!real) { Log(L"Could not load real %ls (error %lu)", p.c_str(), GetLastError()); return; }
-        t.bind(real);
+        if (!real) Log(L"Could not load real %ls (error %lu)", p.c_str(), GetLastError());
+        g_forwarded = 0;
+        t.bind(real, fwd);
         Log(L"Forwarding exports to %ls", p.c_str());
+        if (fwd) {
+            if (g_forwarded) Log(L"%d export(s) routed to the ForwardTo module first", g_forwarded);
+            else Log(L"WARNING: the ForwardTo module exports none of this proxy's functions");
+        }
         return;
     }
     Log(L"'%ls' is not a supported proxy name; exports will not be forwarded", g_selfName.c_str());
@@ -213,13 +226,28 @@ void LoadMods(const Config& cfg) {
         }
     }
 
+    std::wstring fwdPath = cfg.forwardTo.empty() ? std::wstring() : Lower(Resolve(cfg.forwardTo));
     for (const auto& path : paths) {
         size_t slash = path.find_last_of(L'\\');
         if (Lower(path.substr(slash + 1)) == g_selfName) continue;  // never load ourselves
+        if (!fwdPath.empty() && Lower(path) == fwdPath) continue;   // already loaded as ForwardTo
         HMODULE m = LoadLibraryExW(path.c_str(), nullptr, LOAD_WITH_ALTERED_SEARCH_PATH);
         if (m) Log(L"Loaded %ls", path.c_str());
         else Log(L"FAILED to load %ls (error %lu)", path.c_str(), GetLastError());
     }
+}
+
+// Loads the ForwardTo module early (before the game can call our exports).
+HMODULE LoadForwardTarget(const std::wstring& entry) {
+    std::wstring path = Resolve(entry);
+    if (Lower(path) == Lower(g_dir + g_selfName)) {
+        Log(L"ForwardTo points at the proxy itself; ignoring");
+        return nullptr;
+    }
+    HMODULE m = LoadLibraryExW(path.c_str(), nullptr, LOAD_WITH_ALTERED_SEARCH_PATH);
+    if (m) Log(L"ForwardTo module loaded: %ls", path.c_str());
+    else Log(L"FAILED to load ForwardTo module %ls (error %lu)", path.c_str(), GetLastError());
+    return m;
 }
 
 DWORD WINAPI DeferredThread(LPVOID p) {
@@ -243,7 +271,9 @@ void Init(HINSTANCE self) {
     g_log = cfg.log;
     if (!haveCfg) Log(L"chainloader.ini not found in %ls", g_dir.c_str());
 
-    BindRealDll();  // first: the game may call the real exports immediately
+    // First: the game may call our exports immediately.
+    HMODULE fwd = cfg.forwardTo.empty() ? nullptr : LoadForwardTarget(cfg.forwardTo);
+    BindRealDll(fwd);
 
     if (cfg.deferred) {
         auto* heap = new Config(cfg);
